@@ -1,0 +1,152 @@
+#!/usr/bin/env bash
+#
+# ==============================================================================
+# MIT License
+#
+# Copyright (c) 2022 Michael B Hynes
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+# ==============================================================================
+
+SCRIPT_NAME=$(basename $0)
+
+log() {
+  echo "$SCRIPT_NAME: $(date): INFO: $*" 1>&2
+}
+error() {
+  echo "$SCRIPT_NAME: $(date): ERROR: $*" 1>&2
+}
+die() {
+  error "$*"
+  exit 1
+}
+
+check_requires() {
+  log "Running $SCRIPT_NAME with env:"
+  for r in $@; do
+    if ! printenv "$r" > /dev/null; then
+      die "Could not find required env var: '$r'"
+    fi
+    echo "   $r=$(printenv $r)" 1>&2
+  done
+}
+
+export_env() {
+  ROOT_DIR=$(dirname $SCRIPT_NAME)
+  if [ -r "$ROOT_DIR/.env" ]; then
+    log "Reading contents of private $ROOT_DIR/.env ..."
+    eval $(cat "$ROOT_DIR/.env")
+  fi
+  check_requires 'GOOGLE_BILLING_ACCOUNT' 'GOOGLE_CLOUD_PROJECT_PREFIX' 'SITE_DOMAIN' 'GOOGLE_REGION' 'GCS_TFSTATE_BUCKET_PREFIX'
+  git_branch="$(git branch --show)"
+  if [ -z "$git_branch" ]; then
+    die "HEAD is not attached. Please checkout a valid branch." 1>&2
+    exit 1
+  fi
+  export GIT_SHA=$(git rev-parse HEAD || die "Could not get the SHA for the current HEAD")
+  export TARGET_ENV="$git_branch"
+  export TERRAFORM_ROOT="$ROOT_DIR/tf"
+  export GOOGLE_CLOUD_PROJECT="${GOOGLE_CLOUD_PROJECT_PREFIX}-${TARGET_ENV}"
+  export GCS_TFSTATE_BUCKET="${GCS_TFSTATE_BUCKET_PREFIX}-${TARGET_ENV}.${SITE_DOMAIN}"
+}
+
+create_project_without_default_network() {
+  if ! gcloud projects describe "$GOOGLE_CLOUD_PROJECT" > /dev/null; then
+    log "No project $GOOGLE_CLOUD_PROJECT exists; attempting to create it."
+    gcloud projects create "$GOOGLE_CLOUD_PROJECT" \
+      || die "Failed to create project $GOOGLE_CLOUD_PROJECT"
+  fi
+  if gcloud compute networks describe "default" --project="$GOOGLE_CLOUD_PROJECT" --quiet 2> /dev/null; then
+    log "Deleting default network in $GOOGLE_CLOUD_PROJECT..."
+    gcloud compute firewall-rules list "default" --project="$GOOGLE_CLOUD_PROJECT" --format='value(name)' \
+      | xargs gcloud compute firewall-rules delete --project="$GOOGLE_CLOUD_PROJECT" \
+      || die "Failed to delete firewall rules on default network for $GOOGLE_CLOUD_PROJECT"
+    gcloud projects create "$GOOGLE_CLOUD_PROJECT" \
+      || die "Failed to create project $GOOGLE_CLOUD_PROJECT"
+  fi
+
+  if [ -z "$(gcloud beta billing projects describe $GOOGLE_CLOUD_PROJECT --format='value(billingAccountName)')" ]; then
+    log "Linking project to provided billing account ..."
+    gcloud beta billing projects link "$GOOGLE_CLOUD_PROJECT" \
+      --billing-account="$GOOGLE_BILLING_ACCOUNT" \
+      || die "Failed to link $GOOGLE_CLOUD_PROJECT to billing account $GOOGLE_BILLING_ACCOUNT"
+  fi
+
+}
+
+create_terraform_tfstate_bucket() {
+  if ! gcloud storage buckets describe "gs://$GCS_TFSTATE_BUCKET" > /dev/null; then
+    log "No bucket gs://$GCS_TFSTATE_BUCKET found; attempting to create it."
+    gcloud storage buckets create "gs://$GCS_TFSTATE_BUCKET" \
+      --project="$GOOGLE_CLOUD_PROJECT" \
+      || die "Failed to create bucket gs://$GCS_TFSTATE_BUCKET"
+  fi
+}
+
+run_terraform_init() {
+  # Initialize the local terraform environment with -reconfigure,
+  # which will use the remote statefile and not attempt to migrate 
+  # any local existing state, which is desired when switching
+  # between git branches with branch-namespaced backend state buckets.
+  #
+  # For interest:
+  #   https://discuss.hashicorp.com/t/what-would-be-an-equivalent-to-a-force-no-copy-option-to-terraform-init-command/5845
+  _cmd="terraform ${terraform_global_args} init -reconfigure -backend-config=bucket=$GCS_TFSTATE_BUCKET"
+  log "Executing terraform initialization:"
+  log "$_cmd"
+  $_cmd || die "Failed to initialize terraform"
+}
+
+
+# Only run & exit if this script is called directly; run & exit will
+# not be called if dev is being sourced with '.' or 'source'
+if [ "${BASH_SOURCE[0]}" -ef "$0" ]; then
+  export_env
+
+  create_project_without_default_network
+  create_terraform_tfstate_bucket
+  log "Running terraform init..."
+
+  terraform_global_args="-chdir=$TERRAFORM_ROOT"
+  terraform_state_args=""
+  terraform_vars=$(cat <<eof
+    --var billing_account=$GOOGLE_BILLING_ACCOUNT \
+    --var domain=$SITE_DOMAIN \
+    --var project_id=$GOOGLE_CLOUD_PROJECT \
+    --var project_prefix=$GOOGLE_CLOUD_PROJECT_PREFIX \
+    --var region=$GOOGLE_REGION \
+    --var target_env=$TARGET_ENV
+eof
+  )
+
+  run_terraform_init
+
+  if (($# == 0)); then
+    exit 0
+  fi
+  _cmd="terraform ${terraform_global_args} $*"
+  if [[ "$1" == "refresh" ]] \
+  || [[ "$1" == "apply" ]] \
+  || [[ "$1" == "destroy" ]] \
+  || [[ "$1" == "plan" ]]; then
+   _cmd="$_cmd ${terraform_state_args} ${terraform_vars}"
+  fi 
+  log "Executing: $_cmd"
+  $_cmd
+fi
