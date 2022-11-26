@@ -24,28 +24,28 @@ The `terraform` CLI is wrapped in the [`build`](build) shell script, which will 
 
 1. **Install Prerequisites**
 
-  - You must have the following CLI tools in your `$PATH`:
-    - `gcloud`
-    - `terraform`
-    - `git`
-  - Your current working directory must be in an initialized git repository such that `git branch --show` returns a branch name
+    - You must have the following CLI tools in your `$PATH`:
+      - `gcloud`
+      - `terraform`
+      - `git`
+    - Your current working directory must be in an initialized git repository such that `git branch --show` returns a branch name
 
 2. **Set up your** `.env` 
 
-  - The variables in the `.env` are examples to be replaced accordingly:
+    - The variables in the `.env` are examples to be replaced accordingly:
 
-  ```bash
-  export SITE_DOMAIN="example.com"
-  export GOOGLE_BILLING_ACCOUNT="000000-000000-000000"
-  export GOOGLE_REGION="us-west1"
-  export GOOGLE_CLOUD_PROJECT_PREFIX="exdc"
-  export GCS_TFSTATE_BUCKET_PREFIX="exdc-tf"
-  ```
+    ```bash
+    export SITE_DOMAIN="example.com"
+    export GOOGLE_BILLING_ACCOUNT="000000-000000-000000"
+    export GOOGLE_REGION="us-west1"
+    export GOOGLE_CLOUD_PROJECT_PREFIX="exdc"
+    export GCS_TFSTATE_BUCKET_PREFIX="exdc-tf"
+    ```
 
 3. **Create the infrastructure**
 
-  - The `build` script wraps all command-line arguments and passes them to `terraform`, so simply run:
+    - The `build` script wraps all command-line arguments and passes them to `terraform`, so simply run:
 
-  ```bash
-  ./build apply
-  ```
+    ```bash
+    ./build apply
+    ```
