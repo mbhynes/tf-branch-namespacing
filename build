@@ -51,7 +51,7 @@ export_env() {
   ROOT_DIR=$(dirname $SCRIPT_NAME)
   if [ -r "$ROOT_DIR/.env" ]; then
     log "Reading contents of private $ROOT_DIR/.env ..."
-    eval $(cat "$ROOT_DIR/.env")
+    source "$ROOT_DIR/.env"
   fi
   check_requires 'GOOGLE_BILLING_ACCOUNT' 'GOOGLE_CLOUD_PROJECT_PREFIX' 'SITE_DOMAIN' 'GOOGLE_REGION' 'GCS_TFSTATE_BUCKET_PREFIX'
   git_branch="$(git branch --show)"
