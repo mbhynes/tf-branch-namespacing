@@ -72,13 +72,12 @@ create_project_without_default_network() {
     gcloud projects create "$GOOGLE_CLOUD_PROJECT" \
       || die "Failed to create project $GOOGLE_CLOUD_PROJECT"
   fi
+  gcloud services enable compute.googleapis.com --project "$GOOGLE_CLOUD_PROJECT"
   if gcloud compute networks describe "default" --project="$GOOGLE_CLOUD_PROJECT" --quiet 2> /dev/null; then
     log "Deleting default network in $GOOGLE_CLOUD_PROJECT..."
     gcloud compute firewall-rules list "default" --project="$GOOGLE_CLOUD_PROJECT" --format='value(name)' \
       | xargs gcloud compute firewall-rules delete --project="$GOOGLE_CLOUD_PROJECT" \
       || die "Failed to delete firewall rules on default network for $GOOGLE_CLOUD_PROJECT"
-    gcloud projects create "$GOOGLE_CLOUD_PROJECT" \
-      || die "Failed to create project $GOOGLE_CLOUD_PROJECT"
   fi
 
   if [ -z "$(gcloud beta billing projects describe $GOOGLE_CLOUD_PROJECT --format='value(billingAccountName)')" ]; then
